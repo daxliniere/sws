@@ -46,6 +46,7 @@
 #define ACR_ENABLE_KEY "AutoColorRegionEnable"
 #define AI_ENABLE_KEY  "AutoIconEnable"
 #define AL_ENABLE_KEY  "AutoLayoutEnable"
+#define AC_CASE_SENSITIVE_KEY "AutoColorCaseSensitive"
 #define AC_COUNT_KEY   "AutoColorCount"
 #define AC_ITEM_KEY    "AutoColor %d"
 
@@ -88,6 +89,7 @@ static bool g_bACREnabled = false;
 static bool g_bACMEnabled = false;
 static bool g_bAIEnabled = false;
 static bool g_bALEnabled = false;
+static bool g_bACCaseSensitive = false;
 static WDL_String g_ACIni;
 static int s_ignore_update;
 
@@ -596,6 +598,8 @@ void SWS_AutoColorWnd::AddOptionsMenu(HMENU _menu)
 	AddToMenu(_menu, __LOCALIZE("Enable auto region coloring", "sws_ext_menu"), NamedCommandLookup("_S&MAUTOCOLOR_RGN_ENABLE"), -1, false, g_bACREnabled ?  MF_CHECKED : MF_UNCHECKED);
 	AddToMenu(_menu, __LOCALIZE("Enable auto track icon", "sws_ext_menu"), NamedCommandLookup("_S&MAUTOICON_ENABLE"), -1, false, g_bAIEnabled ?  MF_CHECKED : MF_UNCHECKED);
 	AddToMenu(_menu, __LOCALIZE("Enable auto track layout", "sws_ext_menu"), NamedCommandLookup("_S&MAUTOLAYOUT_ENABLE"), -1, false, g_bALEnabled ?  MF_CHECKED : MF_UNCHECKED);
+	AddToMenu(_menu, SWS_SEPARATOR, 0);
+	AddToMenu(_menu, __LOCALIZE("Case sensitive", "sws_ext_menu"), NamedCommandLookup("_SWSAUTOCOLOR_CASE_SENSITIVE"), -1, false, g_bACCaseSensitive ? MF_CHECKED : MF_UNCHECKED);
 }
 
 HMENU SWS_AutoColorWnd::OnContextMenu(int x, int y, bool* wantDefaultItems)
@@ -1247,6 +1251,12 @@ void EnableAutoLayout(COMMAND_T*)
 	g_pACWnd->Update();
 }
 
+void ToggleAutoColorCaseSensitive(COMMAND_T*)
+{
+	g_bACCaseSensitive = !g_bACCaseSensitive;
+	g_pACWnd->Update();
+}
+
 void ApplyAutoColor(COMMAND_T*)
 {
 	AutoColorTrack(true);
@@ -1256,6 +1266,7 @@ void ApplyAutoColor(COMMAND_T*)
 int IsAutoColorOpen(COMMAND_T*)		{ return g_pACWnd->IsWndVisible(); }
 int IsAutoIconEnabled(COMMAND_T*)	{ return g_bAIEnabled; }
 int IsAutoLayoutEnabled(COMMAND_T*)	{ return g_bALEnabled; }
+int IsAutoColorCaseSensitive(COMMAND_T*) { return g_bACCaseSensitive; }
 
 int IsAutoColorEnabled(COMMAND_T* ct)
 {
@@ -1352,6 +1363,7 @@ static COMMAND_T g_commandTable[] =
 	{ { DEFACCEL, "SWS/S&M: Toggle auto region coloring enable" },	"S&MAUTOCOLOR_RGN_ENABLE",	EnableAutoColor,	"Enable auto region coloring",	2, IsAutoColorEnabled },
 	{ { DEFACCEL, "SWS/S&M: Toggle auto track icon enable" },		"S&MAUTOICON_ENABLE",		EnableAutoIcon,		"Enable auto icon",				0, IsAutoIconEnabled },
 	{ { DEFACCEL, "SWS/S&M: Toggle auto track layout enable" },		"S&MAUTOLAYOUT_ENABLE",		EnableAutoLayout,		"Enable auto layout",				0, IsAutoLayoutEnabled },
+	{ { DEFACCEL, "SWS: Toggle case-sensitive auto color matching" }, "SWSAUTOCOLOR_CASE_SENSITIVE", ToggleAutoColorCaseSensitive, "Case sensitive", 0, IsAutoColorCaseSensitive },
 	{ { DEFACCEL, "SWS: Apply auto coloring" },						"SWSAUTOCOLOR_APPLY",		ApplyAutoColor,	},
 	{ {}, LAST_COMMAND, }, // Denote end of table
 };
@@ -1388,8 +1400,10 @@ static int CountMatchingWords(const char* trackName, const char* ruleFilter)
     trackLower[255] = '\0';
     ruleLower[255] = '\0';
 
-    for (char* p = trackLower; *p; ++p) *p = tolower(*p);
-    for (char* p = ruleLower; *p; ++p) *p = tolower(*p);
+    if (!g_bACCaseSensitive) {
+        for (char* p = trackLower; *p; ++p) *p = tolower(static_cast<unsigned char>(*p));
+        for (char* p = ruleLower; *p; ++p) *p = tolower(static_cast<unsigned char>(*p));
+    }
 
     char words[64][64];
     int wordCount = 0;
@@ -1450,6 +1464,7 @@ int AutoColorInit()
 	g_bACREnabled = GetPrivateProfileInt(SWS_INI, ACR_ENABLE_KEY, 0, ini.Get()) ? true : false;
 	g_bAIEnabled = GetPrivateProfileInt(SWS_INI, AI_ENABLE_KEY, 0, ini.Get()) ? true : false;
 	g_bALEnabled = GetPrivateProfileInt(SWS_INI, AL_ENABLE_KEY, 0, ini.Get()) ? true : false;
+	g_bACCaseSensitive = GetPrivateProfileInt(SWS_INI, AC_CASE_SENSITIVE_KEY, 0, ini.Get()) ? true : false;
 
 	char key[32];
 	for (int i = 0; i < iCount; i++)
@@ -1494,6 +1509,8 @@ void AutoColorSaveState()
 	WritePrivateProfileString(SWS_INI, AI_ENABLE_KEY, str, g_ACIni.Get());
 	sprintf(str, "%d", g_bALEnabled ? 1 : 0);
 	WritePrivateProfileString(SWS_INI, AL_ENABLE_KEY, str, g_ACIni.Get());
+	sprintf(str, "%d", g_bACCaseSensitive ? 1 : 0);
+	WritePrivateProfileString(SWS_INI, AC_CASE_SENSITIVE_KEY, str, g_ACIni.Get());
 	sprintf(str, "%d", g_pACItems.GetSize());
 	WritePrivateProfileString(SWS_INI, AC_COUNT_KEY, str, g_ACIni.Get());
 
