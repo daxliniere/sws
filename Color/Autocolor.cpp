@@ -46,6 +46,7 @@
 #define ACR_ENABLE_KEY "AutoColorRegionEnable"
 #define AI_ENABLE_KEY  "AutoIconEnable"
 #define AL_ENABLE_KEY  "AutoLayoutEnable"
+#define AC_SMART_CASE_KEY "AutoColorSmartCase"
 #define AC_COUNT_KEY   "AutoColorCount"
 #define AC_ITEM_KEY    "AutoColor %d"
 
@@ -88,12 +89,14 @@ static bool g_bACREnabled = false;
 static bool g_bACMEnabled = false;
 static bool g_bAIEnabled = false;
 static bool g_bALEnabled = false;
+static bool g_bACSmartCase = false;
 static WDL_String g_ACIni;
 static int s_ignore_update;
 
 // Prototypes for helper functions (ADD THIS)
 static int CountWords(const char* str);
-static int CountMatchingWords(const char* trackName, const char* ruleFilter);
+static int CountMatchingWords(const char* trackName, const char* ruleFilter, bool caseSensitive);
+static bool IsLowercaseRule(const char* ruleFilter);
 
 // Register to marker/region updates
 class AC_MarkerRegionListener : public SNM_MarkerRegionListener {
@@ -138,7 +141,7 @@ void SWS_AutoColorView::GetItemText(SWS_ListItem* item, int iCol, char* str, int
 		return;
 
 	switch (iCol)
-	{	
+	{
 	case COL_TYPE:
 		lstrcpyn(str, __localizeFunc(cTypes[pItem->m_type],"sws_DLG_115",LOCALIZE_FLAG_NOCACHE), iStrMax);
 		break;
@@ -596,6 +599,8 @@ void SWS_AutoColorWnd::AddOptionsMenu(HMENU _menu)
 	AddToMenu(_menu, __LOCALIZE("Enable auto region coloring", "sws_ext_menu"), NamedCommandLookup("_S&MAUTOCOLOR_RGN_ENABLE"), -1, false, g_bACREnabled ?  MF_CHECKED : MF_UNCHECKED);
 	AddToMenu(_menu, __LOCALIZE("Enable auto track icon", "sws_ext_menu"), NamedCommandLookup("_S&MAUTOICON_ENABLE"), -1, false, g_bAIEnabled ?  MF_CHECKED : MF_UNCHECKED);
 	AddToMenu(_menu, __LOCALIZE("Enable auto track layout", "sws_ext_menu"), NamedCommandLookup("_S&MAUTOLAYOUT_ENABLE"), -1, false, g_bALEnabled ?  MF_CHECKED : MF_UNCHECKED);
+	AddToMenu(_menu, SWS_SEPARATOR, 0);
+	AddToMenu(_menu, __LOCALIZE("Smart case sensitivity", "sws_ext_menu"), NamedCommandLookup("_SWSAUTOCOLOR_SMART_CASE"), -1, false, g_bACSmartCase ? MF_CHECKED : MF_UNCHECKED);
 }
 
 HMENU SWS_AutoColorWnd::OnContextMenu(int x, int y, bool* wantDefaultItems)
@@ -737,28 +742,32 @@ void ApplyColorRuleToTrack(FlatSet<SWS_RuleTrack> *activeRules, SWS_RuleItem* ru
 		MediaTrack* temp = NULL;
 		const int numTracks = GetNumTracks();
 		activeRules->reserve(numTracks);
-		
+
 		for (int i = 0; i <= numTracks; i++)
 		{
-			MediaTrack* tr = i ? GetTrack(nullptr, i - 1) : GetMasterTrack(nullptr);			
-			
+			MediaTrack* tr = i ? GetTrack(nullptr, i - 1) : GetMasterTrack(nullptr);
+
 			struct RuleMatch {
 				SWS_RuleItem* rule;
 				int totalWords;
 				bool isSpecial;
+				bool exactCase;
+				bool lowercaseFallback;
 			};
-			WDL_PtrList<RuleMatch> matches;			
-			
+			WDL_PtrList<RuleMatch> matches;
+
 			for (int r = 0; r < g_pACItems.GetSize(); r++) {
 				SWS_RuleItem* currentRule = g_pACItems.Get(r);
 				if (currentRule->m_type != AC_TRACK) continue;
-				
+
 				bool bMatch = false;
 				bool isSpecial = false;
 				int totalWords = 0;
-				
-				if (i) 
-				{					
+				bool exactCase = false;
+				bool lowercaseFallback = false;
+
+				if (i)
+				{
 					if (strcmp(currentRule->m_str_filter.Get(), cFilterTypes[AC_FOLDER]) == 0) {
 						int iType;
 						GetFolderDepth(tr, &iType, &temp);
@@ -846,10 +855,12 @@ void ApplyColorRuleToTrack(FlatSet<SWS_RuleTrack> *activeRules, SWS_RuleItem* ru
 						char* cName = (char*)GetSetMediaTrackInfo(tr, "P_NAME", NULL);
 						if (cName && cName[0]) {
 							int wordCount = CountWords(currentRule->m_str_filter.Get());
-							int matchCount = CountMatchingWords(cName, currentRule->m_str_filter.Get());							
+							int matchCount = CountMatchingWords(cName, currentRule->m_str_filter.Get(), false);
 							if (matchCount > 0 && matchCount == wordCount) {
 								bMatch = true;
 								totalWords = wordCount;
+								exactCase = CountMatchingWords(cName, currentRule->m_str_filter.Get(), true) == wordCount;
+								lowercaseFallback = IsLowercaseRule(currentRule->m_str_filter.Get());
 							}
 						}
 					}
@@ -858,41 +869,50 @@ void ApplyColorRuleToTrack(FlatSet<SWS_RuleTrack> *activeRules, SWS_RuleItem* ru
 					bMatch = true;
 					isSpecial = true;
 				}
-				
+
 				if (bMatch) {
 					RuleMatch* rm = new RuleMatch();
 					rm->rule = currentRule;
 					rm->totalWords = isSpecial ? 999 : totalWords;
 					rm->isSpecial = isSpecial;
+					rm->exactCase = exactCase;
+					rm->lowercaseFallback = lowercaseFallback;
 					matches.Add(rm);
 				}
-			}			
-			
+			}
+
 			SWS_RuleItem* bestRule = NULL;
 			int bestTotalWords = -1;
-			
+			bool bestExactCase = false;
+			bool bestLowercaseFallback = false;
+
 			for (int m = 0; m < matches.GetSize(); m++) {
 				RuleMatch* rm = matches.Get(m);
-				if (rm->totalWords > bestTotalWords) {
+				if (rm->totalWords > bestTotalWords ||
+					(g_bACSmartCase && rm->totalWords == bestTotalWords &&
+						(rm->exactCase > bestExactCase ||
+							(rm->exactCase == bestExactCase && rm->lowercaseFallback > bestLowercaseFallback)))) {
 					bestTotalWords = rm->totalWords;
+					bestExactCase = rm->exactCase;
+					bestLowercaseFallback = rm->lowercaseFallback;
 					bestRule = rm->rule;
 				}
-			}			
-			
+			}
+
 			if (bestRule) {
 				auto pACTrack = activeRules->find(tr);
 				if (pACTrack == activeRules->end()) {
 					pACTrack = activeRules->insert(tr).first;
 				}
-				
+
 				bool bColor = bDoColors && !pACTrack->m_bColored && bestRule->m_color != -AC_IGNORE-1;
 				bool bIcon = bDoIcons && !pACTrack->m_bIconed && bestRule->m_icon.Get()[0];
 				bool bLayout[2] = {
 					bDoLayout && !pACTrack->m_bLayouted[0] && bestRule->m_layout[0].Get()[0],
 					bDoLayout && !pACTrack->m_bLayouted[1] && bestRule->m_layout[1].Get()[0]
 				};
-				
-				if (bColor || bIcon || bLayout[0] || bLayout[1]) {					
+
+				if (bColor || bIcon || bLayout[0] || bLayout[1]) {
 					if (bColor) {
 						int iCurColor = *(int*)GetSetMediaTrackInfo(tr, "I_CUSTOMCOLOR", NULL);
 						if (!(iCurColor & 0x1000000)) iCurColor = 0;
@@ -928,7 +948,7 @@ void ApplyColorRuleToTrack(FlatSet<SWS_RuleTrack> *activeRules, SWS_RuleItem* ru
 						pACTrack->m_col = SWS_ColorFromNative(newCol);
 						pACTrack->m_bColored = true;
 					}
-					
+
 					if (bIcon) {
 						if (_stricmp(bestRule->m_icon.Get(), pACTrack->m_icon.Get())) {
 							const char *cur = (const char*)GetSetMediaTrackInfo(tr, "P_ICON", NULL);
@@ -942,7 +962,7 @@ void ApplyColorRuleToTrack(FlatSet<SWS_RuleTrack> *activeRules, SWS_RuleItem* ru
 						}
 						pACTrack->m_bIconed = true;
 					}
-					
+
 					for (int k=0; k<2; k++) if (bLayout[k]) {
 						pACTrack->m_bLayouted[k] = true;
 						if (!_stricmp(bestRule->m_layout[k].Get(), pACTrack->m_layout[k].Get()))
@@ -969,8 +989,8 @@ void ApplyColorRuleToTrack(FlatSet<SWS_RuleTrack> *activeRules, SWS_RuleItem* ru
 						pACTrack->m_layout[k].Set(bestRule->m_layout[k].Get());
 					}
 				}
-			}			
-			
+			}
+
 			for (int m = 0; m < matches.GetSize(); m++) {
 				delete matches.Get(m);
 			}
@@ -1121,6 +1141,8 @@ void ApplyColorRuleToMarkerRegion(SWS_RuleItem* _rule, int _flags)
 				SWS_RuleItem* rule;
 				int totalWords;
 				bool isSpecial;
+				bool exactCase;
+				bool lowercaseFallback;
 			};
 			WDL_PtrList<RuleMatch> matches;
 
@@ -1136,6 +1158,8 @@ void ApplyColorRuleToMarkerRegion(SWS_RuleItem* _rule, int _flags)
 				bool bMatch = false;
 				bool isSpecial = false;
 				int totalWords = 0;
+				bool exactCase = false;
+				bool lowercaseFallback = false;
 
 				if (!strcmp(cFilterTypes[AC_RGNANY], currentRule->m_str_filter.Get())) {
 					bMatch = true;
@@ -1147,11 +1171,13 @@ void ApplyColorRuleToMarkerRegion(SWS_RuleItem* _rule, int _flags)
 				}
 				else if (name && name[0]) {
 					int wordCount = CountWords(currentRule->m_str_filter.Get());
-					int matchCount = CountMatchingWords(name, currentRule->m_str_filter.Get());
+					int matchCount = CountMatchingWords(name, currentRule->m_str_filter.Get(), false);
 					// Match only if ALL words are present (100%)
 					if (matchCount > 0 && matchCount == wordCount) {
 						bMatch = true;
 						totalWords = wordCount;
+						exactCase = CountMatchingWords(name, currentRule->m_str_filter.Get(), true) == wordCount;
+						lowercaseFallback = IsLowercaseRule(currentRule->m_str_filter.Get());
 					}
 				}
 
@@ -1160,6 +1186,8 @@ void ApplyColorRuleToMarkerRegion(SWS_RuleItem* _rule, int _flags)
 					rm->rule = currentRule;
 					rm->totalWords = isSpecial ? 999 : totalWords;
 					rm->isSpecial = isSpecial;
+					rm->exactCase = exactCase;
+					rm->lowercaseFallback = lowercaseFallback;
 					matches.Add(rm);
 				}
 			}
@@ -1167,18 +1195,25 @@ void ApplyColorRuleToMarkerRegion(SWS_RuleItem* _rule, int _flags)
 			// Select rule with most words (most specific)
 			SWS_RuleItem* bestRule = NULL;
 			int bestTotalWords = -1;
+			bool bestExactCase = false;
+			bool bestLowercaseFallback = false;
 
 			for (int m = 0; m < matches.GetSize(); m++) {
 				RuleMatch* rm = matches.Get(m);
-				if (rm->totalWords > bestTotalWords) {
+				if (rm->totalWords > bestTotalWords ||
+					(g_bACSmartCase && rm->totalWords == bestTotalWords &&
+						(rm->exactCase > bestExactCase ||
+							(rm->exactCase == bestExactCase && rm->lowercaseFallback > bestLowercaseFallback)))) {
 					bestTotalWords = rm->totalWords;
+					bestExactCase = rm->exactCase;
+					bestLowercaseFallback = rm->lowercaseFallback;
 					bestRule = rm->rule;
 				}
 			}
 
 			if (bestRule) {
-				SetProjectMarkerByIndex(NULL, x-1, isRgn, pos, end, num, NULL, 
-					bestRule->m_color==-AC_NONE-1 ? (isRgn?ct->marker:ct->region) : 
+				SetProjectMarkerByIndex(NULL, x-1, isRgn, pos, end, num, NULL,
+					bestRule->m_color==-AC_NONE-1 ? (isRgn?ct->marker:ct->region) :
 					SWS_ColorToNative(bestRule->m_color | 0x1000000));
 			}
 
@@ -1247,6 +1282,12 @@ void EnableAutoLayout(COMMAND_T*)
 	g_pACWnd->Update();
 }
 
+void ToggleAutoColorSmartCase(COMMAND_T*)
+{
+	g_bACSmartCase = !g_bACSmartCase;
+	g_pACWnd->Update();
+}
+
 void ApplyAutoColor(COMMAND_T*)
 {
 	AutoColorTrack(true);
@@ -1256,6 +1297,7 @@ void ApplyAutoColor(COMMAND_T*)
 int IsAutoColorOpen(COMMAND_T*)		{ return g_pACWnd->IsWndVisible(); }
 int IsAutoIconEnabled(COMMAND_T*)	{ return g_bAIEnabled; }
 int IsAutoLayoutEnabled(COMMAND_T*)	{ return g_bALEnabled; }
+int IsAutoColorSmartCase(COMMAND_T*) { return g_bACSmartCase; }
 
 int IsAutoColorEnabled(COMMAND_T* ct)
 {
@@ -1352,6 +1394,7 @@ static COMMAND_T g_commandTable[] =
 	{ { DEFACCEL, "SWS/S&M: Toggle auto region coloring enable" },	"S&MAUTOCOLOR_RGN_ENABLE",	EnableAutoColor,	"Enable auto region coloring",	2, IsAutoColorEnabled },
 	{ { DEFACCEL, "SWS/S&M: Toggle auto track icon enable" },		"S&MAUTOICON_ENABLE",		EnableAutoIcon,		"Enable auto icon",				0, IsAutoIconEnabled },
 	{ { DEFACCEL, "SWS/S&M: Toggle auto track layout enable" },		"S&MAUTOLAYOUT_ENABLE",		EnableAutoLayout,		"Enable auto layout",				0, IsAutoLayoutEnabled },
+	{ { DEFACCEL, "SWS: Toggle smart case sensitivity for auto color matching" }, "SWSAUTOCOLOR_SMART_CASE", ToggleAutoColorSmartCase, "Smart case sensitivity", 0, IsAutoColorSmartCase },
 	{ { DEFACCEL, "SWS: Apply auto coloring" },						"SWSAUTOCOLOR_APPLY",		ApplyAutoColor,	},
 	{ {}, LAST_COMMAND, }, // Denote end of table
 };
@@ -1377,7 +1420,7 @@ static int CountWords(const char* str)
     return count;
 }
 
-static int CountMatchingWords(const char* trackName, const char* ruleFilter)
+static int CountMatchingWords(const char* trackName, const char* ruleFilter, bool caseSensitive)
 {
     if (!trackName || !trackName[0] || !ruleFilter || !ruleFilter[0]) return 0;
 
@@ -1388,8 +1431,10 @@ static int CountMatchingWords(const char* trackName, const char* ruleFilter)
     trackLower[255] = '\0';
     ruleLower[255] = '\0';
 
-    for (char* p = trackLower; *p; ++p) *p = tolower(*p);
-    for (char* p = ruleLower; *p; ++p) *p = tolower(*p);
+    if (!caseSensitive) {
+        for (char* p = trackLower; *p; ++p) *p = tolower(static_cast<unsigned char>(*p));
+        for (char* p = ruleLower; *p; ++p) *p = tolower(static_cast<unsigned char>(*p));
+    }
 
     char words[64][64];
     int wordCount = 0;
@@ -1416,6 +1461,18 @@ static int CountMatchingWords(const char* trackName, const char* ruleFilter)
     }
 
     return matches;
+}
+
+static bool IsLowercaseRule(const char* ruleFilter)
+{
+    bool hasLetter = false;
+    for (const unsigned char* p = reinterpret_cast<const unsigned char*>(ruleFilter); *p; ++p) {
+        if (isalpha(*p)) {
+            hasLetter = true;
+            if (!islower(*p)) return false;
+        }
+    }
+    return hasLetter;
 }
 
 // ============================================================================
@@ -1450,6 +1507,7 @@ int AutoColorInit()
 	g_bACREnabled = GetPrivateProfileInt(SWS_INI, ACR_ENABLE_KEY, 0, ini.Get()) ? true : false;
 	g_bAIEnabled = GetPrivateProfileInt(SWS_INI, AI_ENABLE_KEY, 0, ini.Get()) ? true : false;
 	g_bALEnabled = GetPrivateProfileInt(SWS_INI, AL_ENABLE_KEY, 0, ini.Get()) ? true : false;
+	g_bACSmartCase = GetPrivateProfileInt(SWS_INI, AC_SMART_CASE_KEY, 0, ini.Get()) ? true : false;
 
 	char key[32];
 	for (int i = 0; i < iCount; i++)
@@ -1494,6 +1552,8 @@ void AutoColorSaveState()
 	WritePrivateProfileString(SWS_INI, AI_ENABLE_KEY, str, g_ACIni.Get());
 	sprintf(str, "%d", g_bALEnabled ? 1 : 0);
 	WritePrivateProfileString(SWS_INI, AL_ENABLE_KEY, str, g_ACIni.Get());
+	sprintf(str, "%d", g_bACSmartCase ? 1 : 0);
+	WritePrivateProfileString(SWS_INI, AC_SMART_CASE_KEY, str, g_ACIni.Get());
 	sprintf(str, "%d", g_pACItems.GetSize());
 	WritePrivateProfileString(SWS_INI, AC_COUNT_KEY, str, g_ACIni.Get());
 
