@@ -138,7 +138,7 @@ void SWS_AutoColorView::GetItemText(SWS_ListItem* item, int iCol, char* str, int
 		return;
 
 	switch (iCol)
-	{	
+	{
 	case COL_TYPE:
 		lstrcpyn(str, __localizeFunc(cTypes[pItem->m_type],"sws_DLG_115",LOCALIZE_FLAG_NOCACHE), iStrMax);
 		break;
@@ -737,28 +737,28 @@ void ApplyColorRuleToTrack(FlatSet<SWS_RuleTrack> *activeRules, SWS_RuleItem* ru
 		MediaTrack* temp = NULL;
 		const int numTracks = GetNumTracks();
 		activeRules->reserve(numTracks);
-		
+
 		for (int i = 0; i <= numTracks; i++)
 		{
-			MediaTrack* tr = i ? GetTrack(nullptr, i - 1) : GetMasterTrack(nullptr);			
-			
+			MediaTrack* tr = i ? GetTrack(nullptr, i - 1) : GetMasterTrack(nullptr);
+
 			struct RuleMatch {
 				SWS_RuleItem* rule;
 				int totalWords;
 				bool isSpecial;
 			};
-			WDL_PtrList<RuleMatch> matches;			
-			
+			WDL_PtrList<RuleMatch> matches;
+
 			for (int r = 0; r < g_pACItems.GetSize(); r++) {
 				SWS_RuleItem* currentRule = g_pACItems.Get(r);
 				if (currentRule->m_type != AC_TRACK) continue;
-				
+
 				bool bMatch = false;
 				bool isSpecial = false;
 				int totalWords = 0;
-				
-				if (i) 
-				{					
+
+				if (i)
+				{
 					if (strcmp(currentRule->m_str_filter.Get(), cFilterTypes[AC_FOLDER]) == 0) {
 						int iType;
 						GetFolderDepth(tr, &iType, &temp);
@@ -846,7 +846,7 @@ void ApplyColorRuleToTrack(FlatSet<SWS_RuleTrack> *activeRules, SWS_RuleItem* ru
 						char* cName = (char*)GetSetMediaTrackInfo(tr, "P_NAME", NULL);
 						if (cName && cName[0]) {
 							int wordCount = CountWords(currentRule->m_str_filter.Get());
-							int matchCount = CountMatchingWords(cName, currentRule->m_str_filter.Get());							
+							int matchCount = CountMatchingWords(cName, currentRule->m_str_filter.Get());
 							if (matchCount > 0 && matchCount == wordCount) {
 								bMatch = true;
 								totalWords = wordCount;
@@ -858,7 +858,7 @@ void ApplyColorRuleToTrack(FlatSet<SWS_RuleTrack> *activeRules, SWS_RuleItem* ru
 					bMatch = true;
 					isSpecial = true;
 				}
-				
+
 				if (bMatch) {
 					RuleMatch* rm = new RuleMatch();
 					rm->rule = currentRule;
@@ -866,33 +866,33 @@ void ApplyColorRuleToTrack(FlatSet<SWS_RuleTrack> *activeRules, SWS_RuleItem* ru
 					rm->isSpecial = isSpecial;
 					matches.Add(rm);
 				}
-			}			
-			
+			}
+
 			SWS_RuleItem* bestRule = NULL;
 			int bestTotalWords = -1;
-			
+
 			for (int m = 0; m < matches.GetSize(); m++) {
 				RuleMatch* rm = matches.Get(m);
 				if (rm->totalWords > bestTotalWords) {
 					bestTotalWords = rm->totalWords;
 					bestRule = rm->rule;
 				}
-			}			
-			
+			}
+
 			if (bestRule) {
 				auto pACTrack = activeRules->find(tr);
 				if (pACTrack == activeRules->end()) {
 					pACTrack = activeRules->insert(tr).first;
 				}
-				
+
 				bool bColor = bDoColors && !pACTrack->m_bColored && bestRule->m_color != -AC_IGNORE-1;
 				bool bIcon = bDoIcons && !pACTrack->m_bIconed && bestRule->m_icon.Get()[0];
 				bool bLayout[2] = {
 					bDoLayout && !pACTrack->m_bLayouted[0] && bestRule->m_layout[0].Get()[0],
 					bDoLayout && !pACTrack->m_bLayouted[1] && bestRule->m_layout[1].Get()[0]
 				};
-				
-				if (bColor || bIcon || bLayout[0] || bLayout[1]) {					
+
+				if (bColor || bIcon || bLayout[0] || bLayout[1]) {
 					if (bColor) {
 						int iCurColor = *(int*)GetSetMediaTrackInfo(tr, "I_CUSTOMCOLOR", NULL);
 						if (!(iCurColor & 0x1000000)) iCurColor = 0;
@@ -928,7 +928,7 @@ void ApplyColorRuleToTrack(FlatSet<SWS_RuleTrack> *activeRules, SWS_RuleItem* ru
 						pACTrack->m_col = SWS_ColorFromNative(newCol);
 						pACTrack->m_bColored = true;
 					}
-					
+
 					if (bIcon) {
 						if (_stricmp(bestRule->m_icon.Get(), pACTrack->m_icon.Get())) {
 							const char *cur = (const char*)GetSetMediaTrackInfo(tr, "P_ICON", NULL);
@@ -942,7 +942,7 @@ void ApplyColorRuleToTrack(FlatSet<SWS_RuleTrack> *activeRules, SWS_RuleItem* ru
 						}
 						pACTrack->m_bIconed = true;
 					}
-					
+
 					for (int k=0; k<2; k++) if (bLayout[k]) {
 						pACTrack->m_bLayouted[k] = true;
 						if (!_stricmp(bestRule->m_layout[k].Get(), pACTrack->m_layout[k].Get()))
@@ -969,8 +969,8 @@ void ApplyColorRuleToTrack(FlatSet<SWS_RuleTrack> *activeRules, SWS_RuleItem* ru
 						pACTrack->m_layout[k].Set(bestRule->m_layout[k].Get());
 					}
 				}
-			}			
-			
+			}
+
 			for (int m = 0; m < matches.GetSize(); m++) {
 				delete matches.Get(m);
 			}
@@ -1177,8 +1177,8 @@ void ApplyColorRuleToMarkerRegion(SWS_RuleItem* _rule, int _flags)
 			}
 
 			if (bestRule) {
-				SetProjectMarkerByIndex(NULL, x-1, isRgn, pos, end, num, NULL, 
-					bestRule->m_color==-AC_NONE-1 ? (isRgn?ct->marker:ct->region) : 
+				SetProjectMarkerByIndex(NULL, x-1, isRgn, pos, end, num, NULL,
+					bestRule->m_color==-AC_NONE-1 ? (isRgn?ct->marker:ct->region) :
 					SWS_ColorToNative(bestRule->m_color | 0x1000000));
 			}
 
